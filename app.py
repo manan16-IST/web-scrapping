@@ -1,86 +1,57 @@
 from flask import Flask, request, jsonify
-import pandas as pd
-import numpy as np
+import csv
 
 app = Flask(__name__)
 
-# --- LOAD DATA ONCE ---
-# Make sure 'scrapping_results.csv' is in the same folder as this script
 CSV_FILE = 'scrapping_results.csv'
+data = []
 
-def clean_claps(clap_str):
-    """
-    Converts Medium clap strings (e.g., '1.5K', '500', '') into integers.
-    """
-    if pd.isna(clap_str) or clap_str == '':
-        return 0
-    
-    clap_str = str(clap_str).strip().upper()
-    
-    if 'K' in clap_str:
-        return int(float(clap_str.replace('K', '')) * 1000)
-    elif 'M' in clap_str:
-        return int(float(clap_str.replace('M', '')) * 1000000)
-    
-    try:
-        return int(clap_str)
-    except:
-        return 0
-
+# Load data using standard CSV (Lighter than Pandas)
 try:
-    df = pd.read_csv(CSV_FILE)
-    # Pre-process claps column to integers for sorting later
-    df['Claps_Num'] = df['Claps'].apply(clean_claps)
-    # Fill NaN values to avoid errors
-    df.fillna('', inplace=True)
-    print("Data loaded successfully.")
+    with open(CSV_FILE, 'r', encoding='utf-8') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            data.append(row)
+    print(f"Loaded {len(data)} rows.")
 except Exception as e:
     print(f"Error loading CSV: {e}")
-    df = pd.DataFrame()
+
+def clean_claps(clap_str):
+    if not clap_str: return 0
+    s = str(clap_str).strip().upper()
+    if 'K' in s: return int(float(s.replace('K', '')) * 1000)
+    if 'M' in s: return int(float(s.replace('M', '')) * 1000000)
+    try: return int(s)
+    except: return 0
 
 @app.route('/')
 def home():
-    return "Medium Search API is Running. Use /search?query=your_keyword"
+    return "API Running! Use /search?query=example"
 
-@app.route('/search', methods=['GET'])
-def search_articles():
+@app.route('/search')
+def search():
     query = request.args.get('query', '').lower()
-    
-    if not query:
-        return jsonify({"error": "Please provide a query parameter"}), 400
+    if not query: return jsonify({'error': 'No query provided'})
 
-    if df.empty:
-        return jsonify({"error": "Data not loaded"}), 500
-
-    # 1. FILTER: Search for query in Title or Keywords
-    # We use string contains logic.
-    mask = (
-        df['Title'].str.lower().str.contains(query, na=False) | 
-        df['Keywords'].str.lower().str.contains(query, na=False) |
-        df['Text'].str.lower().str.contains(query, na=False)
-    )
-    filtered_df = df[mask]
-
-    # 2. SORT: By Claps (Highest first)
-    sorted_df = filtered_df.sort_values(by='Claps_Num', ascending=False)
-
-    # 3. SLICE: Top 10
-    top_10 = sorted_df.head(10)
-
-    # 4. FORMAT: Return only Title and URL as requested
     results = []
-    for _, row in top_10.iterrows():
-        results.append({
-            "Title": row['Title'],
-            "URL": row['URL'],
-            "Claps": row['Claps'] # Added for verification, optional
-        })
+    for row in data:
+        # Check Title, Keywords, and Text
+        content = (str(row.get('Title', '')) + " " + 
+                   str(row.get('Keywords', '')) + " " + 
+                   str(row.get('Text', ''))).lower()
+        
+        if query in content:
+            row['claps_num'] = clean_claps(row.get('Claps', '0'))
+            results.append(row)
 
-    return jsonify({
-        "query": query,
-        "count": len(results),
-        "results": results
-    })
+    # Sort by claps and take top 10
+    results.sort(key=lambda x: x['claps_num'], reverse=True)
+    top_10 = results[:10]
+
+    # Format output
+    final_output = [{'Title': r.get('Title'), 'URL': r.get('URL')} for r in top_10]
+    
+    return jsonify({'count': len(final_output), 'results': final_output})
 
 if __name__ == '__main__':
     app.run(debug=True)
